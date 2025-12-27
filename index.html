@@ -18,7 +18,7 @@
         /* MODAL */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; justify-content: center; align-items: flex-start; padding-top: 50px; overflow-y: auto; }
         .modal-box { background: white; padding: 25px; border-radius: 10px; width: 90%; max-width: 650px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 50px; }
-        .code-block { background: #f4f4f4; border: 1px solid #ddd; padding: 10px; font-family: monospace; font-size: 0.8em; height: 120px; overflow-y: scroll; white-space: pre; margin-bottom: 10px; display: block; width: 100%; box-sizing: border-box; color: #333; }
+        .code-block { background: #f4f4f4; border: 1px solid #ddd; padding: 10px; font-family: monospace; font-size: 0.8em; height: 150px; overflow-y: scroll; white-space: pre; margin-bottom: 10px; display: block; width: 100%; box-sizing: border-box; color: #333; }
         .setup-input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
         .btn-green { background: #28a745; color: white; border: none; padding: 10px; width: 100%; border-radius: 5px; cursor: pointer; font-weight: bold; }
         .step-list { padding-left: 20px; line-height: 1.5; color: #444; margin-bottom: 15px; }
@@ -79,7 +79,7 @@
     <div class="modal-overlay" id="setup-modal">
         <div class="modal-box">
             <h3 style="margin-top:0; color:#003366;">⚙️ Connect Your Cloud</h3>
-            <p><strong>Step 1:</strong> Copy the code below.</p>
+            <p><strong>Step 1:</strong> Copy this New Code (Updates Spreadsheet Rows):</p>
             
             <textarea id="script-code" class="code-block" readonly onclick="this.select()">
 function doPost(e){
@@ -87,31 +87,65 @@ function doPost(e){
   try{
     var p=JSON.parse(e.postData.contents);
     var ss=SpreadsheetApp.getActiveSpreadsheet();
-    var s=ss.getSheetByName("Logs");
-    if(!s) s=ss.insertSheet("Logs");
     
-    if(p.action=="save"){
-      var pl=proc(p.content.logs);
-      var dataToSave = { logs: pl, academics: p.content.academics };
-      s.clear();
-      s.getRange(1,1).setValue(JSON.stringify(dataToSave));
-      return ContentService.createTextOutput(JSON.stringify({status:"success"}));
+    // 1. Save Raw Data for App Loading
+    var sRaw=ss.getSheetByName("App_Raw_Data"); 
+    if(!sRaw) sRaw=ss.insertSheet("App_Raw_Data");
+    sRaw.clear();
+    
+    var pl=proc(p.content.logs);
+    var dataToSave = { logs: pl, academics: p.content.academics };
+    sRaw.getRange(1,1).setValue(JSON.stringify(dataToSave));
+
+    // 2. Save Readable Rows to Sheets
+    updateSheet(ss, "Endovascular_Log", pl.endo, ["Date","IP","Category","Diagnosis","Role","Surgeon","Pre-Op","Post-Op"]);
+    updateSheet(ss, "Open_Surgery_Log", pl.open, ["Date","IP","Category","Diagnosis","Role","Surgeon","Pre-Op","Post-Op"]);
+    
+    // 3. Save Academics
+    var acaFlat = [];
+    if(p.content.academics){
+      for(var k in p.content.academics) {
+        // k is the type (sem, conf, pub), r is the row data
+        p.content.academics[k].forEach(r => acaFlat.push([r.date, k.toUpperCase(), r.c1, r.c2, r.c3])); 
+      }
     }
+    updateSheetArray(ss, "Academics_Log", acaFlat, ["Date","Category","Field 1","Field 2","Field 3"]);
+
+    return ContentService.createTextOutput(JSON.stringify({status:"success"}));
   }catch(e){return ContentService.createTextOutput(JSON.stringify({status:"error",m:e.toString()}));}
   finally{lock.releaseLock();}
 }
 
+function updateSheet(ss, name, data, headers){
+  var s = ss.getSheetByName(name);
+  if(!s) s = ss.insertSheet(name);
+  s.clear();
+  s.appendRow(headers);
+  s.setFrozenRows(1);
+  if(data && data.length > 0){
+    var rows = data.map(r => [r.date, r.ip, r.cat, r.dx, r.role, r.surg, r.preLink, r.postLink]);
+    s.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+}
+
+function updateSheetArray(ss, name, rows, headers){
+  var s = ss.getSheetByName(name);
+  if(!s) s = ss.insertSheet(name);
+  s.clear();
+  s.appendRow(headers);
+  s.setFrozenRows(1);
+  if(rows && rows.length > 0){
+    s.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+}
+
 function doGet(e){
   try{
-    var s=SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Logs");
-    // Check if sheet exists or is empty
-    if(!s || s.getLastRow() === 0) return ContentService.createTextOutput(JSON.stringify({status:"success", data:{logs:{endo:[],open:[]}, academics:{sem:[],conf:[],pub:[]}} }));
-    
+    var s=SpreadsheetApp.getActiveSpreadsheet().getSheetByName("App_Raw_Data");
     var d=s.getRange(1,1).getValue();
     if(!d) return ContentService.createTextOutput(JSON.stringify({status:"success", data:{logs:{endo:[],open:[]}, academics:{sem:[],conf:[],pub:[]}} }));
-    
     return ContentService.createTextOutput(JSON.stringify({status:"success",data:JSON.parse(d)}));
-  }catch(e){return ContentService.createTextOutput(JSON.stringify({status:"error", m:e.toString()}));}
+  }catch(e){return ContentService.createTextOutput(JSON.stringify({status:"error", m:"No Data"}));}
 }
 
 function proc(l){
@@ -236,6 +270,7 @@ function sv(f,b,n){
 
     // --- 2. INITIALIZATION ---
     window.onload = function() {
+        // Build Summary Table
         let html = "";
         for (const [sec, items] of Object.entries(CONFIG)) {
             html += `<h1 class="main-divider" style="margin:10px 0 5px 0; font-size:0.9em">${sec}</h1><table class="summary-table">`;
@@ -243,6 +278,8 @@ function sv(f,b,n){
             html += `</table>`;
         }
         document.getElementById('summary-container').innerHTML = html;
+
+        // Load Local & Check Cloud
         loadLocal();
         if(document.querySelectorAll('tbody tr').length === 0) { addRow('log-endo'); addRow('log-open'); }
         if(localStorage.getItem('CloudURL')) document.getElementById('sync-msg').innerHTML = "✅ Connected to Drive";
@@ -272,22 +309,23 @@ function sv(f,b,n){
 
     function addRow(id, d={}) {
         const row = document.createElement('tr');
+        // Image Links logic
         const preL = d.preLink ? `<a href="${d.preLink}" target="_blank" class="img-link">Pre</a>` : '';
         const postL = d.postLink ? `<a href="${d.postLink}" target="_blank" class="img-link">Post</a>` : '';
 
         row.innerHTML = `
-            <td data-label="Date"><input type="date" class="d-date" value="${d.date||''}" onchange="saveLocal()"></td>
-            <td data-label="IP"><input type="text" class="d-ip" value="${d.ip||''}" oninput="saveLocal()"></td>
-            <td data-label="Cat"><select class="cat-select" onchange="updateStats()">${getCatOpts(d.cat)}</select></td>
-            <td data-label="Dx"><textarea class="d-dx" oninput="saveLocal()">${d.dx||''}</textarea></td>
-            <td data-label="Role"><select class="d-role" onchange="saveLocal()"><option>Primary</option><option ${d.role==='Assistant'?'selected':''}>Assistant</option></select></td>
-            <td data-label="Surg"><input type="text" class="d-surg" value="${d.surg||''}" oninput="saveLocal()"></td>
+            <td><input type="date" class="d-date" value="${d.date||''}" onchange="saveLocal()"></td>
+            <td><input type="text" class="d-ip" value="${d.ip||''}" oninput="saveLocal()"></td>
+            <td><select class="cat-select" onchange="updateStats()">${getCatOpts(d.cat)}</select></td>
+            <td><textarea class="d-dx" oninput="saveLocal()">${d.dx||''}</textarea></td>
+            <td><select class="d-role" onchange="saveLocal()"><option>Primary</option><option ${d.role==='Assistant'?'selected':''}>Assistant</option><option ${d.role==='Observer'?'selected':''}>Observer</option></select></td>
+            <td><input type="text" class="d-surg" value="${d.surg||''}" oninput="saveLocal()"></td>
             <td style="font-size:0.8em">
                 <input type="file" class="f-pre" accept="image/*" title="Pre"><br><input type="file" class="f-post" accept="image/*" title="Post">
                 <div>${preL} ${postL}</div>
                 <input type="hidden" class="h-pre" value="${d.preLink||''}"><input type="hidden" class="h-post" value="${d.postLink||''}">
             </td>
-            <td><button class="btn btn-del" onclick="this.closest('tr').remove();updateStats()">X</button></td>`;
+            <td><button class="btn-del" onclick="this.closest('tr').remove();updateStats()">X</button></td>`;
         document.getElementById(id).querySelector('tbody').appendChild(row);
         updateStats();
     }
@@ -298,7 +336,7 @@ function sv(f,b,n){
         <td><textarea class="a-c1" oninput="saveLocal()" placeholder="${ph[1]}">${d.c1||''}</textarea></td>
         <td><input type="text" class="a-c2" value="${d.c2||''}" oninput="saveLocal()" placeholder="${ph[2]}"></td>
         <td><input type="text" class="a-c3" value="${d.c3||''}" oninput="saveLocal()" placeholder="${ph[3]}"></td>
-        <td><button class="btn btn-del" onclick="this.closest('tr').remove();saveLocal()">X</button></td>`;
+        <td><button class="btn-del" onclick="this.closest('tr').remove();saveLocal()">X</button></td>`;
         document.getElementById(id).querySelector('tbody').appendChild(row);
     }
 
